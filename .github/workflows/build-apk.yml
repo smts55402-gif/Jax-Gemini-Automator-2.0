@@ -15,12 +15,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Verify source package
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           test -f "JAX_FINAL_CLEAN_PROJECT.zip"
           echo "Source ZIP found:"
           ls -lh "JAX_FINAL_CLEAN_PROJECT.zip"
@@ -28,80 +28,91 @@ jobs:
       - name: Extract Android project
         shell: bash
         run: |
-          set -e
-
+          set -euo pipefail
           rm -rf /tmp/jax-project
           mkdir -p /tmp/jax-project
-
           unzip -q "JAX_FINAL_CLEAN_PROJECT.zip" -d /tmp/jax-project
-
           echo "Extracted files:"
-          find /tmp/jax-project -maxdepth 3 -type f | head -100
-
-          PROJECT_ROOT="$(find /tmp/jax-project -name settings.gradle -o -name settings.gradle.kts | head -1 | xargs -r dirname)"
-
+          find /tmp/jax-project -maxdepth 4 -type f | sort | head -200
+          PROJECT_ROOT="$(find /tmp/jax-project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit | xargs -r dirname)"
           test -n "$PROJECT_ROOT"
-
+          test -f "$PROJECT_ROOT/app/build.gradle" || test -f "$PROJECT_ROOT/app/build.gradle.kts"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
       - name: Restore Android project
         shell: bash
         run: |
-          set -e
-
+          set -euo pipefail
           rm -rf app gradle
           rm -f build.gradle build.gradle.kts settings.gradle settings.gradle.kts gradle.properties
-
           cp -a "$PROJECT_ROOT"/. ./
-
           test -f settings.gradle || test -f settings.gradle.kts
           test -d app
-
           echo "Android project restored successfully."
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Set up Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit 2>/dev/null || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found"
+            exit 1
+          fi
+          echo "sdkmanager=$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
+          cache-provider: basic
 
       - name: Verify Android project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           echo "Java:"
           java -version
           echo "Gradle:"
           gradle --version
+          echo "Android SDK:"
+          ls -ld "$ANDROID_HOME"
+          ls -ld "$ANDROID_HOME/platforms/android-35"
+          ls -ld "$ANDROID_HOME/build-tools/35.0.0"
           echo "Project:"
           ls -la
-          echo "App:"
           ls -la app
 
       - name: Build debug APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: Verify APK
         shell: bash
         run: |
-          set -e
-
-          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -1)"
-
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
           test -n "$APK"
           test -s "$APK"
-
           echo "APK created successfully:"
           ls -lh "$APK"
 
